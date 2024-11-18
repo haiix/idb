@@ -1,10 +1,4 @@
 export declare const version = "0.0.1";
-type UpgReq = [
-    string,
-    // StoreName
-    'create' | 'delete',
-    (db: IDBDatabase) => unknown
-];
 type Req = [
     string,
     IDBTransactionMode,
@@ -18,10 +12,10 @@ export type IndexParameters = {
 export declare class Idb {
     readonly name: string;
     version?: number;
-    readonly upgReqs: UpgReq[];
-    readonly reqs: Req[];
-    private commitRequested;
     latestError: unknown;
+    private upgReqs;
+    private reqs;
+    private commitRequested;
     constructor(name: string);
     private open;
     private transaction;
@@ -29,12 +23,15 @@ export declare class Idb {
     objectStoreNames(): Promise<DOMStringList>;
     objectStore(name: string, options?: IDBObjectStoreParameters, indices?: IndexParameters[]): IdbStore;
     deleteObjectStore(name: string): Promise<void>;
-    requestToCommit(): void;
+    requestToCommit(req?: Req): void;
     commit(): Promise<void>;
     deleteDatabase(): Promise<IDBDatabase>;
 }
-declare abstract class IdbStoreBase {
-    protected abstract register<T>(mode: IDBTransactionMode, fn: (os: IDBObjectStore | IDBIndex) => T): Promise<T>;
+declare abstract class IdbStoreBase<U extends IDBObjectStore | IDBIndex> {
+    abstract db: Idb;
+    abstract storeName: string;
+    protected abstract getTarget(tx: IDBTransaction): U;
+    protected register<T>(mode: IDBTransactionMode, fn: (os: U) => T | Promise<T>): Promise<T>;
     count(query?: IDBValidKey | IDBKeyRange): Promise<number>;
     get(query: IDBValidKey | IDBKeyRange): Promise<unknown>;
     getAll(query?: IDBValidKey | IDBKeyRange | null, count?: number): Promise<unknown[]>;
@@ -43,18 +40,19 @@ declare abstract class IdbStoreBase {
     openCursor(query?: IDBValidKey | IDBKeyRange | null, direction?: IDBCursorDirection): AsyncGenerator<IDBCursorWithValue, void>;
     openKeyCursor(query?: IDBValidKey | IDBKeyRange | null, direction?: IDBCursorDirection): AsyncGenerator<IDBCursor, void>;
 }
-export declare class IdbIndex extends IdbStoreBase {
+export declare class IdbIndex extends IdbStoreBase<IDBIndex> {
     readonly db: Idb;
     readonly storeName: string;
     readonly name: string;
     constructor(db: Idb, storeName: string, name: string);
-    protected register<T>(mode: IDBTransactionMode, fn: (os: IDBIndex) => T): Promise<T>;
+    protected getTarget(tx: IDBTransaction): IDBIndex;
 }
-export declare class IdbStore extends IdbStoreBase {
+export declare class IdbStore extends IdbStoreBase<IDBObjectStore> {
     readonly db: Idb;
+    readonly storeName: string;
     readonly name: string;
-    constructor(db: Idb, name: string, options?: IDBObjectStoreParameters, indices?: IndexParameters[]);
-    protected register<T>(mode: IDBTransactionMode, fn: (os: IDBObjectStore) => T): Promise<T>;
+    constructor(db: Idb, name: string);
+    protected getTarget(tx: IDBTransaction): IDBObjectStore;
     add(value: unknown, key?: IDBValidKey): Promise<IDBValidKey>;
     clear(): Promise<void>;
     delete(query: IDBValidKey | IDBKeyRange): Promise<void>;
