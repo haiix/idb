@@ -10,13 +10,19 @@
 export const version = '0.0.1';
 
 type UpgReq = [
-  string, // StoreName
+  string, // ObjectStoreName
   'create' | 'delete', // Method
   (db: IDBDatabase) => unknown,
 ];
 
+type UpgIReq = [
+  string, // IndexName
+  'create' | 'delete', // Method
+  (objectStore: IDBObjectStore) => unknown,
+];
+
 type Req = [
-  string, // StoreName
+  string, // ObjectStoreName
   IDBTransactionMode, // Mode
   (tx: IDBTransaction) => unknown,
 ];
@@ -27,17 +33,15 @@ export type IndexParameters = {
   options?: IDBIndexParameters;
 };
 
-function reqError(req: IDBRequest): Error {
-  return req.error ?? req.transaction?.error ?? new Error('Request failed.');
-}
-
 function queryWrapper<T>(req: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     req.onsuccess = () => {
       resolve(req.result);
     };
     req.onerror = () => {
-      reject(reqError(req));
+      reject(
+        req.error ?? req.transaction?.error ?? new Error('Request failed.'),
+      );
     };
   });
 }
@@ -53,62 +57,51 @@ async function* cursorWrapper<T>(
 
 export class Idb {
   readonly name: string;
-  version?: number;
-  latestError: unknown;
 
   private upgReqs: UpgReq[] = [];
+  private upgIReqs = Object.create(null) as Record<string, UpgIReq[]>;
   private reqs: Req[] = [];
-  private commitRequested = false;
+  private isCommitRequested = false;
 
   constructor(name: string) {
     this.name = name;
   }
 
-  private open<T>(
-    onsuccess: (db: IDBDatabase) => T,
-    onupgradeneeded?: ((db: IDBDatabase) => void) | null,
+  private async open<T>(
+    callback: (db: IDBDatabase) => T | Promise<T>,
+    dbVersion?: number,
+    onupgradeneeded?: (db: IDBDatabase, tx: IDBTransaction | null) => void,
   ): Promise<T> {
-    return new Promise((resolve, reject) => {
-      const req = indexedDB.open(this.name, this.version);
-      req.onsuccess = () => {
-        try {
-          resolve(onsuccess(req.result));
-        } catch (error) {
-          reject(error as Error);
-        } finally {
-          req.result.close();
-        }
+    const req = indexedDB.open(this.name, dbVersion);
+    if (onupgradeneeded) {
+      req.onupgradeneeded = () => {
+        onupgradeneeded(req.result, req.transaction);
       };
-      req.onerror = () => {
-        reject(reqError(req));
-      };
-      if (onupgradeneeded) {
-        req.onupgradeneeded = () => {
-          onupgradeneeded(req.result);
-        };
-      }
-    });
+    }
+    try {
+      return await callback(await queryWrapper(req));
+    } finally {
+      req.result.close();
+    }
   }
 
-  private async transaction(
+  private transaction<T>(
     db: IDBDatabase,
-    storeNames: string[],
+    objectStoreNames: string[],
     mode: IDBTransactionMode,
-    callback: (tx: IDBTransaction) => void,
-  ): Promise<void> {
-    if (!storeNames.length) {
-      return Promise.resolve();
-    }
+    callback: (tx: IDBTransaction) => T,
+  ): Promise<T> {
+    let result: T;
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(storeNames, mode);
+      const tx = db.transaction(objectStoreNames, mode);
       tx.oncomplete = () => {
-        resolve();
+        resolve(result);
       };
       tx.onerror = () => {
         reject(tx.error ?? new Error('Transaction failed.'));
       };
       try {
-        callback(tx);
+        result = callback(tx);
       } catch (error) {
         tx.abort();
         throw error;
@@ -116,33 +109,52 @@ export class Idb {
     });
   }
 
-  getVersion(): Promise<number> {
+  private addUpgIRec(objectStoreName: string, upgIRec: UpgIReq) {
+    if (!this.upgIReqs[objectStoreName]) {
+      this.upgIReqs[objectStoreName] = [];
+    }
+    this.upgIReqs[objectStoreName].push(upgIRec);
+  }
+
+  version(): Promise<number> {
     return this.open((db) => db.version);
   }
 
-  async objectStoreNames(): Promise<DOMStringList> {
+  objectStoreNames(): Promise<DOMStringList> {
     return this.open((db) => db.objectStoreNames);
   }
 
   objectStore(
     name: string,
-    options?: IDBObjectStoreParameters,
+    options?: IDBObjectStoreParameters | null,
     indices?: IndexParameters[],
   ): IdbStore {
     this.upgReqs.push([
       name,
       'create',
-      (idb) => {
-        if (!idb.objectStoreNames.contains(name)) {
-          const store = idb.createObjectStore(name, options);
-          if (indices) {
-            for (const params of indices) {
-              store.createIndex(params.name, params.keyPath, params.options);
-            }
+      (db) => {
+        if (!db.objectStoreNames.contains(name)) {
+          if (options) {
+            db.createObjectStore(name, options);
+          } else {
+            db.createObjectStore(name);
           }
         }
       },
     ]);
+    if (indices) {
+      for (const index of indices) {
+        this.addUpgIRec(name, [
+          index.name,
+          'create',
+          (objectStore) => {
+            if (!objectStore.indexNames.contains(index.name)) {
+              objectStore.createIndex(index.name, index.keyPath, index.options);
+            }
+          },
+        ]);
+      }
+    }
     return new IdbStore(this, name, name);
   }
 
@@ -151,80 +163,131 @@ export class Idb {
       name,
       'delete',
       (db) => {
-        db.deleteObjectStore(name);
+        if (db.objectStoreNames.contains(name)) {
+          db.deleteObjectStore(name);
+        }
       },
     ]);
     return this.commit();
   }
 
-  requestToCommit(req?: Req): void {
-    (async () => {
-      if (req) {
-        this.reqs.push(req);
+  deleteIndex(objectStoreName: string, indexName: string): Promise<void> {
+    this.addUpgIRec(objectStoreName, [
+      indexName,
+      'delete',
+      (objectStore) => {
+        if (objectStore.indexNames.contains(indexName)) {
+          objectStore.deleteIndex(indexName);
+        }
+      },
+    ]);
+    return this.commit();
+  }
+
+  private isNeedToUpg(db: IDBDatabase): boolean {
+    for (const [name, method] of this.upgReqs) {
+      const contains = db.objectStoreNames.contains(name);
+
+      if (method === 'create' && !contains) {
+        return true;
+      } else if (method === 'delete' && contains) {
+        return true;
       }
-      if (this.commitRequested) return;
-      this.commitRequested = true;
-      await Promise.resolve();
-      this.commitRequested = false;
-      await this.commit();
-    })().catch((error: unknown) => {
-      this.latestError = error;
+    }
+    return false;
+  }
+
+  private async isNeedToIUpg(db: IDBDatabase): Promise<boolean> {
+    const targetObjectStoreNames = Object.keys(this.upgIReqs);
+    if (!targetObjectStoreNames.length) return false;
+
+    return this.transaction(db, targetObjectStoreNames, 'readonly', (tx) => {
+      for (const objectStoreName of targetObjectStoreNames) {
+        const objectStore = tx.objectStore(objectStoreName);
+
+        for (const [indexName, method] of this.upgIReqs[
+          objectStoreName
+        ] as UpgIReq[]) {
+          const contains = objectStore.indexNames.contains(indexName);
+
+          if (method === 'create' && !contains) {
+            return true;
+          } else if (method === 'delete' && contains) {
+            return true;
+          }
+        }
+      }
+      return false;
     });
   }
 
-  async commit(): Promise<void> {
+  async requestToCommit(req?: Req): Promise<void> {
+    if (req) {
+      this.reqs.push(req);
+    }
+    if (this.isCommitRequested) return;
+    this.isCommitRequested = true;
+    await Promise.resolve();
+    this.isCommitRequested = false;
+    await this.commit();
+  }
+
+  private async commit(): Promise<void> {
+    let dbVersion = 0;
     if (this.upgReqs.length) {
-      await this.open(async (db) => {
-        let reqUpgrade = false;
-        const currentObjectStores = db.objectStoreNames;
-        for (const [storeName, method] of this.upgReqs) {
-          if (method === 'create' && !currentObjectStores.contains(storeName)) {
-            reqUpgrade = true;
-          } else if (
-            method === 'delete' &&
-            currentObjectStores.contains(storeName)
-          ) {
-            reqUpgrade = true;
-          }
+      dbVersion = await this.open(async (db) => {
+        if (this.isNeedToUpg(db) || (await this.isNeedToIUpg(db))) {
+          return db.version + 1;
         }
-        if (reqUpgrade) {
-          this.version = db.version + 1;
-          return;
-        }
-        this.upgReqs.length = 0;
-        await this.execReqs(db);
+        this.upgReqs = [];
+        this.upgIReqs = Object.create(null) as Record<string, UpgIReq[]>;
+        await this.processReqs(db);
+        return 0;
       });
     }
-    if (this.reqs.length) {
-      await this.open(
-        (db) => this.execReqs(db),
-        this.upgReqs.length
-          ? (db) => {
-              for (const [, , fn] of this.upgReqs) {
-                fn(db);
-              }
-              this.upgReqs.length = 0;
-            }
-          : null,
-      );
+    if (this.reqs.length || this.upgReqs.length) {
+      if (this.upgReqs.length) {
+        await this.open(
+          (db) => this.processReqs(db),
+          dbVersion,
+          (db, tx) => {
+            if (tx) this.processUpgReqs(db, tx);
+          },
+        );
+      } else {
+        await this.open((db) => this.processReqs(db));
+      }
     }
   }
 
-  private execReqs(db: IDBDatabase): Promise<void> {
-    const storeNames = [
-      ...this.reqs.reduce(
-        (set, [storeName]) => set.add(storeName),
-        new Set<string>(),
-      ),
-    ];
+  private processUpgReqs(db: IDBDatabase, tx: IDBTransaction): void {
+    for (const [, , fn] of this.upgReqs) {
+      fn(db);
+    }
+    this.upgReqs = [];
+
+    for (const [storeName, reqs] of Object.entries(this.upgIReqs)) {
+      const objectStore = tx.objectStore(storeName);
+      for (const [, , fn] of reqs) {
+        fn(objectStore);
+      }
+    }
+    this.upgIReqs = Object.create(null) as Record<string, UpgIReq[]>;
+  }
+
+  private async processReqs(db: IDBDatabase): Promise<void> {
+    if (!this.reqs.length) return;
+
+    const objectStoreNames = [...new Set(this.reqs.map(([name]) => name))];
     const mode = this.reqs.every(([, mode]) => mode === 'readonly')
       ? 'readonly'
       : 'readwrite';
-    return this.transaction(db, storeNames, mode, (tx) => {
+
+    await this.transaction(db, objectStoreNames, mode, (tx) => {
       for (const [, , fn] of this.reqs) {
         fn(tx);
       }
-      this.reqs.length = 0;
+      this.reqs = [];
     });
   }
 
@@ -234,13 +297,13 @@ export class Idb {
 }
 
 abstract class IdbStoreBase<U extends IDBObjectStore | IDBIndex> {
-  readonly db: Idb;
-  readonly storeName: string;
+  protected db: Idb;
+  protected osName: string;
   readonly name: string;
 
-  constructor(db: Idb, storeName: string, name: string) {
+  constructor(db: Idb, osName: string, name: string) {
     this.db = db;
-    this.storeName = storeName;
+    this.osName = osName;
     this.name = name;
   }
 
@@ -248,35 +311,43 @@ abstract class IdbStoreBase<U extends IDBObjectStore | IDBIndex> {
 
   protected register<T>(
     mode: IDBTransactionMode,
-    fn: (os: U) => T | Promise<T>,
+    callback: (os: U) => T | Promise<T>,
   ): Promise<T> {
     return new Promise((resolve, reject) => {
-      this.db.requestToCommit([
-        this.storeName,
-        mode,
-        (tx) => {
-          try {
-            resolve(fn(this.getTarget(tx)));
-          } catch (error) {
-            reject(error as Error);
-          }
-        },
-      ]);
+      this.db
+        .requestToCommit([
+          this.osName,
+          mode,
+          (tx) => {
+            try {
+              resolve(callback(this.getTarget(tx)));
+            } catch (error) {
+              reject(error as Error);
+            }
+          },
+        ])
+        .catch((error: unknown) => {
+          reject(error as Error);
+        });
     });
   }
 
   protected registerQuery<T>(
     mode: IDBTransactionMode,
-    fn: (os: U) => IDBRequest<T>,
+    callback: (os: U) => IDBRequest<T>,
   ): Promise<T> {
-    return this.register(mode, (os) => queryWrapper(fn(os)));
+    return this.register(mode, (os) => queryWrapper(callback(os)));
   }
 
   protected async *registerCursor<T>(
     mode: IDBTransactionMode,
-    fn: (os: U) => IDBRequest<T | null>,
+    callback: (os: U) => IDBRequest<T | null>,
   ): AsyncGenerator<T, void, unknown> {
-    yield* await this.register(mode, (os) => cursorWrapper(fn(os)));
+    yield* await this.register(mode, (os) => cursorWrapper(callback(os)));
+  }
+
+  keyPath(): Promise<string | string[]> {
+    return this.register('readonly', (os) => os.keyPath);
   }
 
   count(query?: IDBValidKey | IDBKeyRange): Promise<number> {
@@ -324,15 +395,13 @@ abstract class IdbStoreBase<U extends IDBObjectStore | IDBIndex> {
   }
 }
 
-export class IdbIndex extends IdbStoreBase<IDBIndex> {
-  protected getTarget(tx: IDBTransaction): IDBIndex {
-    return tx.objectStore(this.storeName).index(this.name);
-  }
-}
-
 export class IdbStore extends IdbStoreBase<IDBObjectStore> {
   protected getTarget(tx: IDBTransaction): IDBObjectStore {
-    return tx.objectStore(this.storeName);
+    return tx.objectStore(this.name);
+  }
+
+  autoIncrement(): Promise<boolean> {
+    return this.register('readonly', (os) => os.autoIncrement);
   }
 
   add(value: unknown, key?: IDBValidKey): Promise<IDBValidKey> {
@@ -351,8 +420,30 @@ export class IdbStore extends IdbStoreBase<IDBObjectStore> {
     return new IdbIndex(this.db, this.name, name);
   }
 
+  deleteIndex(indexName: string): Promise<void> {
+    return this.db.deleteIndex(this.name, indexName);
+  }
+
+  indexNames(): Promise<DOMStringList> {
+    return this.register('readonly', (os) => os.indexNames);
+  }
+
   put(value: unknown, key?: IDBValidKey): Promise<IDBValidKey> {
     return this.registerQuery('readwrite', (os) => os.put(value, key));
+  }
+}
+
+export class IdbIndex extends IdbStoreBase<IDBIndex> {
+  protected getTarget(tx: IDBTransaction): IDBIndex {
+    return tx.objectStore(this.osName).index(this.name);
+  }
+
+  multiEntry(): Promise<boolean> {
+    return this.register('readonly', (os) => os.multiEntry);
+  }
+
+  unique(): Promise<boolean> {
+    return this.register('readonly', (os) => os.unique);
   }
 }
 
