@@ -41,7 +41,6 @@ export default [
           allowArrowFunctions: true,
         },
       ],
-      'id-length': ['error', { properties: 'never' }],
       'init-declarations': 'off', // Conflicts with no-useless-assignment
       'max-classes-per-file': 'off',
       'max-lines': 'off',
@@ -84,6 +83,7 @@ export default [
       ],
       '@typescript-eslint/consistent-type-definitions': ['error', 'type'],
       '@typescript-eslint/non-nullable-type-assertion-style': 'off', // Conflicts with @typescript-eslint/no-non-null-assertion
+      '@typescript-eslint/prefer-promise-reject-errors': 'off', // Duplicate @typescript-eslint/only-throw-error
     },
   },
   eslintConfigPrettier,

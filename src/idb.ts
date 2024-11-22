@@ -9,21 +9,29 @@
 
 export const version = '0.0.1';
 
+const READONLY = 0;
+const READWRITE = 1;
+const CREATE = 0;
+const DELETE = 1;
+
+type TransactionMode = typeof READONLY | typeof READWRITE;
+type UpgMethod = typeof CREATE | typeof DELETE;
+
 type UpgReq = [
   string, // ObjectStoreName
-  'create' | 'delete', // Method
+  UpgMethod, // Method
   (db: IDBDatabase) => unknown,
 ];
 
 type UpgIReq = [
   string, // IndexName
-  'create' | 'delete', // Method
+  UpgMethod, // Method
   (objectStore: IDBObjectStore) => unknown,
 ];
 
 type Req = [
   string, // ObjectStoreName
-  IDBTransactionMode, // Mode
+  TransactionMode, // Mode
   (tx: IDBTransaction) => unknown,
 ];
 
@@ -33,7 +41,11 @@ export type IndexParameters = {
   options?: IDBIndexParameters;
 };
 
-function queryWrapper<T>(req: IDBRequest<T>): Promise<T> {
+function createDictionary<T>(): Record<string, T> {
+  return Object.create(null) as Record<string, T>;
+}
+
+function reqToAsync<T>(req: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     req.onsuccess = () => {
       resolve(req.result);
@@ -46,11 +58,11 @@ function queryWrapper<T>(req: IDBRequest<T>): Promise<T> {
   });
 }
 
-async function* cursorWrapper<T>(
+async function* reqToAsyncGen<T>(
   req: IDBRequest<T | null>,
 ): AsyncGenerator<T, void> {
   // eslint-disable-next-line no-await-in-loop
-  for (let cursor; (cursor = await queryWrapper(req)); ) {
+  for (let cursor; (cursor = await reqToAsync(req)); ) {
     yield cursor;
   }
 }
@@ -59,9 +71,9 @@ export class Idb {
   readonly name: string;
 
   private upgReqs: UpgReq[] = [];
-  private upgIReqs = Object.create(null) as Record<string, UpgIReq[]>;
+  private upgIReqs = createDictionary<UpgIReq[]>();
   private reqs: Req[] = [];
-  private isCommitRequested = false;
+  private isRequested = false;
 
   constructor(name: string) {
     this.name = name;
@@ -70,22 +82,22 @@ export class Idb {
   private async open<T>(
     callback: (db: IDBDatabase) => T | Promise<T>,
     dbVersion?: number,
-    onupgradeneeded?: (db: IDBDatabase, tx: IDBTransaction | null) => void,
+    onupgradeneeded?: (db: IDBDatabase, tx: IDBTransaction) => void,
   ): Promise<T> {
     const req = indexedDB.open(this.name, dbVersion);
     if (onupgradeneeded) {
       req.onupgradeneeded = () => {
-        onupgradeneeded(req.result, req.transaction);
+        onupgradeneeded(req.result, req.transaction as IDBTransaction);
       };
     }
     try {
-      return await callback(await queryWrapper(req));
+      return await callback(await reqToAsync(req));
     } finally {
       req.result.close();
     }
   }
 
-  private transaction<T>(
+  private tx<T>(
     db: IDBDatabase,
     objectStoreNames: string[],
     mode: IDBTransactionMode,
@@ -131,7 +143,7 @@ export class Idb {
   ): IdbStore {
     this.upgReqs.push([
       name,
-      'create',
+      CREATE,
       (db) => {
         if (!db.objectStoreNames.contains(name)) {
           if (options) {
@@ -146,7 +158,7 @@ export class Idb {
       for (const index of indices) {
         this.addUpgIRec(name, [
           index.name,
-          'create',
+          CREATE,
           (objectStore) => {
             if (!objectStore.indexNames.contains(index.name)) {
               objectStore.createIndex(index.name, index.keyPath, index.options);
@@ -161,7 +173,7 @@ export class Idb {
   deleteObjectStore(name: string): Promise<void> {
     this.upgReqs.push([
       name,
-      'delete',
+      DELETE,
       (db) => {
         if (db.objectStoreNames.contains(name)) {
           db.deleteObjectStore(name);
@@ -174,7 +186,7 @@ export class Idb {
   deleteIndex(objectStoreName: string, indexName: string): Promise<void> {
     this.addUpgIRec(objectStoreName, [
       indexName,
-      'delete',
+      DELETE,
       (objectStore) => {
         if (objectStore.indexNames.contains(indexName)) {
           objectStore.deleteIndex(indexName);
@@ -188,9 +200,9 @@ export class Idb {
     for (const [name, method] of this.upgReqs) {
       const contains = db.objectStoreNames.contains(name);
 
-      if (method === 'create' && !contains) {
+      if (method === CREATE && !contains) {
         return true;
-      } else if (method === 'delete' && contains) {
+      } else if (method === DELETE && contains) {
         return true;
       }
     }
@@ -201,7 +213,7 @@ export class Idb {
     const targetObjectStoreNames = Object.keys(this.upgIReqs);
     if (!targetObjectStoreNames.length) return false;
 
-    return this.transaction(db, targetObjectStoreNames, 'readonly', (tx) => {
+    return this.tx(db, targetObjectStoreNames, 'readonly', (tx) => {
       for (const objectStoreName of targetObjectStoreNames) {
         const objectStore = tx.objectStore(objectStoreName);
 
@@ -210,9 +222,9 @@ export class Idb {
         ] as UpgIReq[]) {
           const contains = objectStore.indexNames.contains(indexName);
 
-          if (method === 'create' && !contains) {
+          if (method === CREATE && !contains) {
             return true;
-          } else if (method === 'delete' && contains) {
+          } else if (method === DELETE && contains) {
             return true;
           }
         }
@@ -225,10 +237,10 @@ export class Idb {
     if (req) {
       this.reqs.push(req);
     }
-    if (this.isCommitRequested) return;
-    this.isCommitRequested = true;
+    if (this.isRequested) return;
+    this.isRequested = true;
     await Promise.resolve();
-    this.isCommitRequested = false;
+    this.isRequested = false;
     await this.commit();
   }
 
@@ -240,27 +252,27 @@ export class Idb {
           return db.version + 1;
         }
         this.upgReqs = [];
-        this.upgIReqs = Object.create(null) as Record<string, UpgIReq[]>;
-        await this.processReqs(db);
+        this.upgIReqs = createDictionary<UpgIReq[]>();
+        await this.procReqs(db);
         return 0;
       });
     }
     if (this.reqs.length || this.upgReqs.length) {
       if (this.upgReqs.length) {
         await this.open(
-          (db) => this.processReqs(db),
+          (db) => this.procReqs(db),
           dbVersion,
           (db, tx) => {
-            if (tx) this.processUpgReqs(db, tx);
+            this.procUpgReqs(db, tx);
           },
         );
       } else {
-        await this.open((db) => this.processReqs(db));
+        await this.open((db) => this.procReqs(db));
       }
     }
   }
 
-  private processUpgReqs(db: IDBDatabase, tx: IDBTransaction): void {
+  private procUpgReqs(db: IDBDatabase, tx: IDBTransaction): void {
     for (const [, , fn] of this.upgReqs) {
       fn(db);
     }
@@ -272,18 +284,18 @@ export class Idb {
         fn(objectStore);
       }
     }
-    this.upgIReqs = Object.create(null) as Record<string, UpgIReq[]>;
+    this.upgIReqs = createDictionary<UpgIReq[]>();
   }
 
-  private async processReqs(db: IDBDatabase): Promise<void> {
+  private async procReqs(db: IDBDatabase): Promise<void> {
     if (!this.reqs.length) return;
 
     const objectStoreNames = [...new Set(this.reqs.map(([name]) => name))];
-    const mode = this.reqs.every(([, mode]) => mode === 'readonly')
+    const mode = this.reqs.every(([, mode]) => mode === READONLY)
       ? 'readonly'
       : 'readwrite';
 
-    await this.transaction(db, objectStoreNames, mode, (tx) => {
+    await this.tx(db, objectStoreNames, mode, (tx) => {
       for (const [, , fn] of this.reqs) {
         fn(tx);
       }
@@ -292,7 +304,7 @@ export class Idb {
   }
 
   deleteDatabase(): Promise<IDBDatabase> {
-    return queryWrapper(indexedDB.deleteDatabase(this.name));
+    return reqToAsync(indexedDB.deleteDatabase(this.name));
   }
 }
 
@@ -309,11 +321,11 @@ abstract class IdbStoreBase<U extends IDBObjectStore | IDBIndex> {
 
   protected abstract getTarget(tx: IDBTransaction): U;
 
-  protected register<T>(
-    mode: IDBTransactionMode,
+  protected reg<T>(
+    mode: TransactionMode,
     callback: (os: U) => T | Promise<T>,
   ): Promise<T> {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve, reject: (reason: unknown) => void) => {
       this.db
         .requestToCommit([
           this.osName,
@@ -322,76 +334,70 @@ abstract class IdbStoreBase<U extends IDBObjectStore | IDBIndex> {
             try {
               resolve(callback(this.getTarget(tx)));
             } catch (error) {
-              reject(error as Error);
+              reject(error);
             }
           },
         ])
-        .catch((error: unknown) => {
-          reject(error as Error);
-        });
+        .catch(reject);
     });
   }
 
-  protected registerQuery<T>(
-    mode: IDBTransactionMode,
+  protected regq<T>(
+    mode: TransactionMode,
     callback: (os: U) => IDBRequest<T>,
   ): Promise<T> {
-    return this.register(mode, (os) => queryWrapper(callback(os)));
+    return this.reg(mode, (os) => reqToAsync(callback(os)));
   }
 
-  protected async *registerCursor<T>(
-    mode: IDBTransactionMode,
+  protected async *regc<T>(
+    mode: TransactionMode,
     callback: (os: U) => IDBRequest<T | null>,
   ): AsyncGenerator<T, void, unknown> {
-    yield* await this.register(mode, (os) => cursorWrapper(callback(os)));
-  }
-
-  keyPath(): Promise<string | string[]> {
-    return this.register('readonly', (os) => os.keyPath);
+    yield* await this.reg(mode, (os) => reqToAsyncGen(callback(os)));
   }
 
   count(query?: IDBValidKey | IDBKeyRange): Promise<number> {
-    return this.registerQuery('readonly', (os) => os.count(query));
+    return this.regq(READONLY, (os) => os.count(query));
   }
 
   get(query: IDBValidKey | IDBKeyRange): Promise<unknown> {
-    return this.registerQuery('readonly', (os) => os.get(query));
+    return this.regq(READONLY, (os) => os.get(query));
   }
 
   getAll(
     query?: IDBValidKey | IDBKeyRange | null,
     count?: number,
   ): Promise<unknown[]> {
-    return this.registerQuery('readonly', (os) => os.getAll(query, count));
+    return this.regq(READONLY, (os) => os.getAll(query, count));
   }
 
   getAllKeys(
     query?: IDBValidKey | IDBKeyRange | null,
     count?: number,
   ): Promise<IDBValidKey[]> {
-    return this.registerQuery('readonly', (os) => os.getAllKeys(query, count));
+    return this.regq(READONLY, (os) => os.getAllKeys(query, count));
   }
 
   getKey(query: IDBValidKey | IDBKeyRange): Promise<IDBValidKey | undefined> {
-    return this.registerQuery('readonly', (os) => os.getKey(query));
+    return this.regq(READONLY, (os) => os.getKey(query));
+  }
+
+  keyPath(): Promise<string | string[]> {
+    return this.reg(READONLY, (os) => os.keyPath);
   }
 
   openCursor(
     query?: IDBValidKey | IDBKeyRange | null,
     direction?: IDBCursorDirection,
   ): AsyncGenerator<IDBCursorWithValue, void, unknown> {
-    return this.registerCursor('readwrite', (os) =>
-      os.openCursor(query, direction),
-    );
+    return this.regc(READWRITE, (os) => os.openCursor(query, direction));
   }
 
   openKeyCursor(
     query?: IDBValidKey | IDBKeyRange | null,
     direction?: IDBCursorDirection,
   ): AsyncGenerator<IDBCursor, void, unknown> {
-    return this.registerCursor('readwrite', (os) =>
-      os.openKeyCursor(query, direction),
-    );
+    return this.regc(READWRITE, (os) => os.openKeyCursor(query, direction));
   }
 }
 
@@ -400,36 +406,36 @@ export class IdbStore extends IdbStoreBase<IDBObjectStore> {
     return tx.objectStore(this.name);
   }
 
-  autoIncrement(): Promise<boolean> {
-    return this.register('readonly', (os) => os.autoIncrement);
+  add(value: unknown, key?: IDBValidKey): Promise<IDBValidKey> {
+    return this.regq(READWRITE, (os) => os.add(value, key));
   }
 
-  add(value: unknown, key?: IDBValidKey): Promise<IDBValidKey> {
-    return this.registerQuery('readwrite', (os) => os.add(value, key));
+  autoIncrement(): Promise<boolean> {
+    return this.reg(READONLY, (os) => os.autoIncrement);
   }
 
   clear(): Promise<void> {
-    return this.registerQuery('readwrite', (os) => os.clear());
+    return this.regq(READWRITE, (os) => os.clear());
   }
 
   delete(query: IDBValidKey | IDBKeyRange): Promise<void> {
-    return this.registerQuery('readwrite', (os) => os.delete(query));
-  }
-
-  index(name: string): IdbIndex {
-    return new IdbIndex(this.db, this.name, name);
+    return this.regq(READWRITE, (os) => os.delete(query));
   }
 
   deleteIndex(indexName: string): Promise<void> {
     return this.db.deleteIndex(this.name, indexName);
   }
 
+  index(name: string): IdbIndex {
+    return new IdbIndex(this.db, this.name, name);
+  }
+
   indexNames(): Promise<DOMStringList> {
-    return this.register('readonly', (os) => os.indexNames);
+    return this.reg(READONLY, (os) => os.indexNames);
   }
 
   put(value: unknown, key?: IDBValidKey): Promise<IDBValidKey> {
-    return this.registerQuery('readwrite', (os) => os.put(value, key));
+    return this.regq(READWRITE, (os) => os.put(value, key));
   }
 }
 
@@ -439,11 +445,11 @@ export class IdbIndex extends IdbStoreBase<IDBIndex> {
   }
 
   multiEntry(): Promise<boolean> {
-    return this.register('readonly', (os) => os.multiEntry);
+    return this.reg(READONLY, (os) => os.multiEntry);
   }
 
   unique(): Promise<boolean> {
-    return this.register('readonly', (os) => os.unique);
+    return this.reg(READONLY, (os) => os.unique);
   }
 }
 

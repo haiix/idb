@@ -1,7 +1,10 @@
 export declare const version = "0.0.1";
+declare const READONLY = 0;
+declare const READWRITE = 1;
+type TransactionMode = typeof READONLY | typeof READWRITE;
 type Req = [
     string,
-    IDBTransactionMode,
+    TransactionMode,
     (tx: IDBTransaction) => unknown
 ];
 export type IndexParameters = {
@@ -14,10 +17,10 @@ export declare class Idb {
     private upgReqs;
     private upgIReqs;
     private reqs;
-    private isCommitRequested;
+    private isRequested;
     constructor(name: string);
     private open;
-    private transaction;
+    private tx;
     private addUpgIRec;
     version(): Promise<number>;
     objectStoreNames(): Promise<DOMStringList>;
@@ -28,8 +31,8 @@ export declare class Idb {
     private isNeedToIUpg;
     requestToCommit(req?: Req): Promise<void>;
     private commit;
-    private processUpgReqs;
-    private processReqs;
+    private procUpgReqs;
+    private procReqs;
     deleteDatabase(): Promise<IDBDatabase>;
 }
 declare abstract class IdbStoreBase<U extends IDBObjectStore | IDBIndex> {
@@ -38,26 +41,26 @@ declare abstract class IdbStoreBase<U extends IDBObjectStore | IDBIndex> {
     readonly name: string;
     constructor(db: Idb, osName: string, name: string);
     protected abstract getTarget(tx: IDBTransaction): U;
-    protected register<T>(mode: IDBTransactionMode, callback: (os: U) => T | Promise<T>): Promise<T>;
-    protected registerQuery<T>(mode: IDBTransactionMode, callback: (os: U) => IDBRequest<T>): Promise<T>;
-    protected registerCursor<T>(mode: IDBTransactionMode, callback: (os: U) => IDBRequest<T | null>): AsyncGenerator<T, void, unknown>;
-    keyPath(): Promise<string | string[]>;
+    protected reg<T>(mode: TransactionMode, callback: (os: U) => T | Promise<T>): Promise<T>;
+    protected regq<T>(mode: TransactionMode, callback: (os: U) => IDBRequest<T>): Promise<T>;
+    protected regc<T>(mode: TransactionMode, callback: (os: U) => IDBRequest<T | null>): AsyncGenerator<T, void, unknown>;
     count(query?: IDBValidKey | IDBKeyRange): Promise<number>;
     get(query: IDBValidKey | IDBKeyRange): Promise<unknown>;
     getAll(query?: IDBValidKey | IDBKeyRange | null, count?: number): Promise<unknown[]>;
     getAllKeys(query?: IDBValidKey | IDBKeyRange | null, count?: number): Promise<IDBValidKey[]>;
     getKey(query: IDBValidKey | IDBKeyRange): Promise<IDBValidKey | undefined>;
+    keyPath(): Promise<string | string[]>;
     openCursor(query?: IDBValidKey | IDBKeyRange | null, direction?: IDBCursorDirection): AsyncGenerator<IDBCursorWithValue, void, unknown>;
     openKeyCursor(query?: IDBValidKey | IDBKeyRange | null, direction?: IDBCursorDirection): AsyncGenerator<IDBCursor, void, unknown>;
 }
 export declare class IdbStore extends IdbStoreBase<IDBObjectStore> {
     protected getTarget(tx: IDBTransaction): IDBObjectStore;
-    autoIncrement(): Promise<boolean>;
     add(value: unknown, key?: IDBValidKey): Promise<IDBValidKey>;
+    autoIncrement(): Promise<boolean>;
     clear(): Promise<void>;
     delete(query: IDBValidKey | IDBKeyRange): Promise<void>;
-    index(name: string): IdbIndex;
     deleteIndex(indexName: string): Promise<void>;
+    index(name: string): IdbIndex;
     indexNames(): Promise<DOMStringList>;
     put(value: unknown, key?: IDBValidKey): Promise<IDBValidKey>;
 }
