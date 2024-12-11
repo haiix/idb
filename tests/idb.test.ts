@@ -156,6 +156,16 @@ describe('Store test', () => {
     expect(result).toStrictEqual(['value11', 'value12']);
   });
 
+  test('To continue processing without calling cursor.continue().', async () => {
+    const db = idb.open('testdb');
+    const store1 = db.objectStore('store1');
+    const result = [];
+    for await (const cursor of store1.openCursor()) {
+      result.push(cursor.value);
+    }
+    expect(result).toStrictEqual(['value11']);
+  });
+
   test('To openKeyCursor.', async () => {
     const db = idb.open('testdb');
     const store1 = db.objectStore('store1');

@@ -2,7 +2,7 @@
   "name": "@haiix/idb",
   "version": "0.0.1",
   "description": "async/await based IndexedDB wrapper",
-  "keywords": [],
+  "keywords": ["Indexed Database", "IndexedDB", "idb"],
   "author": "haiix",
   "license": "MIT",
   "main": "dist/idb.mjs",
