@@ -41,7 +41,7 @@ declare abstract class IdbStoreBase<U extends IDBObjectStore | IDBIndex> {
     readonly name: string;
     constructor(db: Idb, osName: string, name: string);
     protected abstract getTarget(tx: IDBTransaction): U;
-    protected reg<T>(mode: TransactionMode, callback: (os: U, tx: IDBTransaction) => T | Promise<T>): Promise<T>;
+    protected reg<T>(mode: TransactionMode, callback: (os: U) => T | Promise<T>): Promise<T>;
     protected regq<T>(mode: TransactionMode, callback: (os: U) => IDBRequest<T>): Promise<T>;
     protected regc<T>(mode: TransactionMode, callback: (os: U) => IDBRequest<T | null>): AsyncGenerator<T, void, unknown>;
     count(query?: IDBValidKey | IDBKeyRange): Promise<number>;

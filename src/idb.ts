@@ -60,28 +60,11 @@ function reqToAsync<T>(req: IDBRequest<T>): Promise<T> {
 
 async function* reqToAsyncGen<T>(
   req: IDBRequest<T | null>,
-  tx: IDBTransaction,
 ): AsyncGenerator<T, void> {
-  let resolve: (value: unknown) => void;
-  const createPromise = () =>
-    new Promise((_resolve) => {
-      resolve = _resolve;
-    });
-
-  const handleTransactionComplete = () => {
-    resolve(null);
-  };
-
-  tx.addEventListener('complete', handleTransactionComplete);
-  for (
-    let cursor;
-    // eslint-disable-next-line no-await-in-loop
-    (cursor = await Promise.race([reqToAsync(req), createPromise()]));
-
-  ) {
-    yield cursor as Awaited<T>;
+  // eslint-disable-next-line no-await-in-loop
+  for (let cursor; (cursor = await reqToAsync(req)); ) {
+    yield cursor;
   }
-  tx.removeEventListener('complete', handleTransactionComplete);
 }
 
 export class Idb {
@@ -340,7 +323,7 @@ abstract class IdbStoreBase<U extends IDBObjectStore | IDBIndex> {
 
   protected reg<T>(
     mode: TransactionMode,
-    callback: (os: U, tx: IDBTransaction) => T | Promise<T>,
+    callback: (os: U) => T | Promise<T>,
   ): Promise<T> {
     return new Promise((resolve, reject: (reason: unknown) => void) => {
       this.db
@@ -349,7 +332,7 @@ abstract class IdbStoreBase<U extends IDBObjectStore | IDBIndex> {
           mode,
           (tx) => {
             try {
-              resolve(callback(this.getTarget(tx), tx));
+              resolve(callback(this.getTarget(tx)));
             } catch (error) {
               reject(error);
             }
@@ -370,7 +353,7 @@ abstract class IdbStoreBase<U extends IDBObjectStore | IDBIndex> {
     mode: TransactionMode,
     callback: (os: U) => IDBRequest<T | null>,
   ): AsyncGenerator<T, void, unknown> {
-    yield* await this.reg(mode, (os, tx) => reqToAsyncGen(callback(os), tx));
+    yield* await this.reg(mode, (os) => reqToAsyncGen(callback(os)));
   }
 
   count(query?: IDBValidKey | IDBKeyRange): Promise<number> {

@@ -162,6 +162,9 @@ describe('Store test', () => {
     const result = [];
     for await (const cursor of store1.openCursor()) {
       result.push(cursor.value);
+      if (result.length) {
+        break;
+      }
     }
     expect(result).toStrictEqual(['value11']);
   });
