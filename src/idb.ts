@@ -1,13 +1,13 @@
 /*
  * idb.ts
  *
- * Copyright (c) 2024 haiix
+ * Copyright (c) 2025 haiix
  *
  * This software is released under the MIT license.
  * See: https://opensource.org/licenses/MIT
  */
 
-export const version = '0.0.1';
+export const version = '0.1.0';
 
 const READONLY = 0;
 const READWRITE = 1;
