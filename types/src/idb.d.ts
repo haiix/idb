@@ -1,4 +1,4 @@
-export declare const version = "0.0.1";
+export declare const version = "0.1.0";
 declare const READONLY = 0;
 declare const READWRITE = 1;
 type TransactionMode = typeof READONLY | typeof READWRITE;
