@@ -1,7 +1,7 @@
 {
   "name": "@haiix/idb",
   "version": "0.0.1",
-  "description": "async/await based IndexedDB wrapper",
+  "description": "A lightweight, promise-based wrapper for IndexedDB that simplifies database operations with async/await syntax.",
   "keywords": ["Indexed Database", "IndexedDB", "idb"],
   "author": "haiix",
   "license": "MIT",
