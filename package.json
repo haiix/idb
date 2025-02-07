@@ -7,6 +7,10 @@
   "license": "MIT",
   "main": "dist/idb.mjs",
   "types": "types/src/idb.d.ts",
+  "files": [
+    "dist",
+    "types"
+  ],
   "scripts": {
     "dev": "npm run watch",
     "build": "npm run clean && npm run fix && npm run test && npm run webpack",
@@ -17,7 +21,7 @@
     "fix": "npm run format && npm run lint",
     "test": "jest",
     "coverage": "jest --coverage",
-    "clean": "rimraf dist"
+    "clean": "rimraf dist tests"
   },
   "devDependencies": {
     "@eslint/js": "^9.15.0",

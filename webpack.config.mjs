@@ -19,6 +19,10 @@ export default {
   experiments: {
     outputModule: true,
   },
+  resolve: {
+    extensions: ['.ts', '.js'],
+  },
+  devtool: 'source-map',
   module: {
     rules: [
       {
@@ -26,8 +30,5 @@ export default {
         use: 'ts-loader',
       },
     ],
-  },
-  resolve: {
-    extensions: ['.ts', '.js'],
   },
 };
