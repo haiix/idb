@@ -1,7 +1,7 @@
-const READONLY = 0;
-const READWRITE = 1;
-const CREATE = 0;
-const DELETE = 1;
+const READONLY = 'readonly';
+const READWRITE = 'readwrite';
+const CREATE = 'create';
+const DELETE = 'delete';
 
 type TransactionMode = typeof READONLY | typeof READWRITE;
 type UpgMethod = typeof CREATE | typeof DELETE;
@@ -50,7 +50,23 @@ function reqToAsync<T>(req: IDBRequest<T>): Promise<T> {
 async function* reqToAsyncGen<T>(
   req: IDBRequest<T | null>,
 ): AsyncGenerator<T, void> {
-  for (let cursor; (cursor = await reqToAsync(req)); ) {
+  let resolveNext: ((value: T | null) => void) | null = null;
+  let rejectNext: ((reason?: unknown) => void) | null = null;
+
+  req.onsuccess = (): void => {
+    if (resolveNext) resolveNext(req.result);
+  };
+  req.onerror = (): void => {
+    if (rejectNext) rejectNext(req.error ?? req.transaction?.error);
+  };
+
+  while (true) {
+    const cursor = await new Promise<T | null>((resolve, reject) => {
+      resolveNext = resolve;
+      rejectNext = reject;
+    });
+
+    if (!cursor) break;
     yield cursor;
   }
 }
@@ -62,6 +78,7 @@ export class Idb {
   private upgIReqs = createDictionary<UpgIReq[]>();
   private reqs: Req[] = [];
   private isRequested = false;
+  private commitPromise: Promise<void> = Promise.resolve();
 
   constructor(name: string) {
     this.name = name;
@@ -134,11 +151,7 @@ export class Idb {
       CREATE,
       (db): void => {
         if (!db.objectStoreNames.contains(name)) {
-          if (options) {
-            db.createObjectStore(name, options);
-          } else {
-            db.createObjectStore(name);
-          }
+          db.createObjectStore(name, options ?? undefined);
         }
       },
     ]);
@@ -188,9 +201,7 @@ export class Idb {
     for (const [name, method] of this.upgReqs) {
       const contains = db.objectStoreNames.contains(name);
 
-      if (method === CREATE && !contains) {
-        return true;
-      } else if (method === DELETE && contains) {
+      if ((method === CREATE && !contains) || (method === DELETE && contains)) {
         return true;
       }
     }
@@ -209,9 +220,10 @@ export class Idb {
         for (const [indexName, method] of this.upgIReqs[objectStoreName]) {
           const contains = objectStore.indexNames.contains(indexName);
 
-          if (method === CREATE && !contains) {
-            return true;
-          } else if (method === DELETE && contains) {
+          if (
+            (method === CREATE && !contains) ||
+            (method === DELETE && contains)
+          ) {
             return true;
           }
         }
@@ -226,9 +238,20 @@ export class Idb {
     }
     if (this.isRequested) return;
     this.isRequested = true;
-    await Promise.resolve();
-    this.isRequested = false;
-    await this.commit();
+
+    // Schedule the next commit after the currently executing commit has fully completed.
+    this.commitPromise = this.commitPromise.then(async () => {
+      this.isRequested = false;
+      if (
+        this.reqs.length > 0 ||
+        this.upgReqs.length > 0 ||
+        Object.keys(this.upgIReqs).length > 0
+      ) {
+        await this.commit();
+      }
+    });
+
+    return this.commitPromise;
   }
 
   private async commit(): Promise<void> {
@@ -260,33 +283,37 @@ export class Idb {
   }
 
   private procUpgReqs(db: IDBDatabase, tx: IDBTransaction): void {
-    for (const [, , fn] of this.upgReqs) {
+    const currentUpgReqs = this.upgReqs;
+    this.upgReqs = [];
+    for (const [, , fn] of currentUpgReqs) {
       fn(db);
     }
-    this.upgReqs = [];
 
-    for (const [storeName, reqs] of Object.entries(this.upgIReqs)) {
+    const currentUpgIReqs = this.upgIReqs;
+    this.upgIReqs = createDictionary<UpgIReq[]>();
+    for (const [storeName, reqs] of Object.entries(currentUpgIReqs)) {
       const objectStore = tx.objectStore(storeName);
       for (const [, , fn] of reqs) {
         fn(objectStore);
       }
     }
-    this.upgIReqs = createDictionary<UpgIReq[]>();
   }
 
   private async procReqs(db: IDBDatabase): Promise<void> {
     if (!this.reqs.length) return;
 
-    const objectStoreNames = [...new Set(this.reqs.map(([name]) => name))];
-    const mode = this.reqs.every(([, mode]) => mode === READONLY)
+    const currentReqs = this.reqs;
+    this.reqs = [];
+
+    const objectStoreNames = [...new Set(currentReqs.map(([name]) => name))];
+    const mode = currentReqs.every(([, mode]) => mode === READONLY)
       ? 'readonly'
       : 'readwrite';
 
     await this.tx(db, objectStoreNames, mode, (tx) => {
-      for (const [, , fn] of this.reqs) {
+      for (const [, , fn] of currentReqs) {
         fn(tx);
       }
-      this.reqs = [];
     });
   }
 
@@ -347,15 +374,21 @@ abstract class IdbStoreBase<U extends IDBObjectStore | IDBIndex> {
     return this.regq(READONLY, (os) => os.count(query));
   }
 
-  get(query: IDBValidKey | IDBKeyRange): Promise<unknown> {
-    return this.regq(READONLY, (os) => os.get(query));
+  get<T = unknown>(query: IDBValidKey | IDBKeyRange): Promise<T | undefined> {
+    return this.regq<T | undefined>(
+      READONLY,
+      (os) => os.get(query) as IDBRequest<T | undefined>,
+    );
   }
 
-  getAll(
+  getAll<T = unknown>(
     query?: IDBValidKey | IDBKeyRange | null,
     count?: number,
-  ): Promise<unknown[]> {
-    return this.regq(READONLY, (os) => os.getAll(query, count));
+  ): Promise<T[]> {
+    return this.regq<T[]>(
+      READONLY,
+      (os) => os.getAll(query, count) as IDBRequest<T[]>,
+    );
   }
 
   getAllKeys(
