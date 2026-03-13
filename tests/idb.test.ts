@@ -1,23 +1,19 @@
-// As of version 5, fake-indexeddb no longer includes a structuredClone polyfill.
-// See: https://github.com/dumbmatter/fakeIndexedDB
-import 'core-js/stable/structured-clone';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import 'fake-indexeddb/auto';
 import * as idb from '../src/idb';
 
-/* eslint max-lines-per-function: off */
-
 describe('Basic test', () => {
-  test('The default module has the open function.', () => {
+  it('The default module has the open function.', () => {
     expect(idb.default.open).toBe(idb.open);
   });
 
-  test('To get version', async () => {
+  it('To get version', async () => {
     const db = idb.open('testdb');
     const version = await db.version();
     expect(version).toBe(1);
   });
 
-  test('To open the database and add data to the object store.', async () => {
+  it('To open the database and add data to the object store.', async () => {
     const db = idb.open('testdb');
     expect(db).toBeInstanceOf(idb.Idb);
 
@@ -65,50 +61,56 @@ describe('Store test', () => {
     await db.deleteDatabase();
   });
 
-  test('Not to add existing keys.', async () => {
+  it('Not to add existing keys.', async () => {
     const db = idb.open('testdb');
     const store1 = db.objectStore('store1');
+    let error: Error | undefined;
     try {
       await store1.add('value13', 'key11');
-    } catch (error: unknown) {
-      expect(error).toBeInstanceOf(Error);
+    } catch (_error: unknown) {
+      error = _error as Error;
     }
+    expect(error?.name).toBe('ConstraintError');
   });
 
-  test('To put existing keys.', async () => {
+  it('To put existing keys.', async () => {
     const db = idb.open('testdb');
     const store1 = db.objectStore('store1');
     await store1.put('value13', 'key11');
+    const value = await store1.get('key11');
+    expect(value).toBe('value13');
   });
 
-  test('To retrieve values from keys that exist.', async () => {
+  it('To retrieve values from keys that exist.', async () => {
     const db = idb.open('testdb');
     const store1 = db.objectStore('store1');
     const value11 = await store1.get('key11');
     expect(value11).toBe('value11');
   });
 
-  test('To get objectStoreNames.', async () => {
+  it('To get objectStoreNames.', async () => {
     const db = idb.open('testdb');
     const objectStoreNames = await db.objectStoreNames();
-    expect(objectStoreNames).toStrictEqual(['store1', 'store2']);
+    expect(objectStoreNames).toHaveLength(2);
+    expect(objectStoreNames[0]).toBe('store1');
+    expect(objectStoreNames[1]).toBe('store2');
   });
 
-  test('To get autoIncrement.', async () => {
+  it('To get autoIncrement.', async () => {
     const db = idb.open('testdb');
     const store2 = db.objectStore('store2');
     const autoIncrement = await store2.autoIncrement();
     expect(autoIncrement).toBe(true);
   });
 
-  test('To get keyPath.', async () => {
+  it('To get keyPath.', async () => {
     const db = idb.open('testdb');
     const store2 = db.objectStore('store2');
     const keyPath = await store2.keyPath();
     expect(keyPath).toBe('id');
   });
 
-  test('To delete.', async () => {
+  it('To delete.', async () => {
     const db = idb.open('testdb');
     const store1 = db.objectStore('store1');
     await store1.delete('key11');
@@ -116,28 +118,28 @@ describe('Store test', () => {
     expect(value11).toBeUndefined();
   });
 
-  test('To count.', async () => {
+  it('To count.', async () => {
     const db = idb.open('testdb');
     const store1 = db.objectStore('store1');
     const num = await store1.count();
     expect(num).toBe(2);
   });
 
-  test('To getAll.', async () => {
+  it('To getAll.', async () => {
     const db = idb.open('testdb');
     const store1 = db.objectStore('store1');
     const result = await store1.getAll();
     expect(result).toStrictEqual(['value11', 'value12']);
   });
 
-  test('To getAllKeys.', async () => {
+  it('To getAllKeys.', async () => {
     const db = idb.open('testdb');
     const store1 = db.objectStore('store1');
     const result = await store1.getAllKeys();
     expect(result).toStrictEqual(['key11', 'key12']);
   });
 
-  test('To getKey.', async () => {
+  it('To getKey.', async () => {
     const db = idb.open('testdb');
     const store1 = db.objectStore('store1');
     const range = IDBKeyRange.upperBound('key12');
@@ -145,7 +147,7 @@ describe('Store test', () => {
     expect(result).toBe('key11');
   });
 
-  test('To openCursor.', async () => {
+  it('To openCursor.', async () => {
     const db = idb.open('testdb');
     const store1 = db.objectStore('store1');
     const result = [];
@@ -156,7 +158,7 @@ describe('Store test', () => {
     expect(result).toStrictEqual(['value11', 'value12']);
   });
 
-  test('To continue processing without calling cursor.continue().', async () => {
+  it('To continue processing without calling cursor.continue().', async () => {
     const db = idb.open('testdb');
     const store1 = db.objectStore('store1');
     const result = [];
@@ -169,7 +171,7 @@ describe('Store test', () => {
     expect(result).toStrictEqual(['value11']);
   });
 
-  test('To openKeyCursor.', async () => {
+  it('To openKeyCursor.', async () => {
     const db = idb.open('testdb');
     const store1 = db.objectStore('store1');
     const result = [];
@@ -180,7 +182,7 @@ describe('Store test', () => {
     expect(result).toStrictEqual(['key11', 'key12']);
   });
 
-  test('To clear.', async () => {
+  it('To clear.', async () => {
     const db = idb.open('testdb');
     const store1 = db.objectStore('store1');
     await store1.clear();
@@ -192,14 +194,15 @@ describe('Store test', () => {
     expect(result2).toBeUndefined();
   });
 
-  test('To deleteObjectStore.', async () => {
+  it('To deleteObjectStore.', async () => {
     const db = idb.open('testdb');
     await db.deleteObjectStore('store1');
     const objectStoreNames = await db.objectStoreNames();
-    expect(objectStoreNames).toStrictEqual(['store2']);
+    expect(objectStoreNames).toHaveLength(1);
+    expect(objectStoreNames[0]).toBe('store2');
   });
 
-  test('DB should not be upgraded when the object store already exist.', async () => {
+  it('DB should not be upgraded when the object store already exist.', async () => {
     const db = idb.open('testdb');
     expect(await db.version()).toBe(2);
 
@@ -228,14 +231,15 @@ describe('Index test', () => {
     await db.deleteDatabase();
   });
 
-  test('To get indexNames.', async () => {
+  it('To get indexNames.', async () => {
     const db = idb.open('testdb');
     const store1 = db.objectStore('store1');
     const indexNames = await store1.indexNames();
-    expect(indexNames).toStrictEqual(['index1']);
+    expect(indexNames).toHaveLength(1);
+    expect(indexNames[0]).toBe('index1');
   });
 
-  test('To get multiEntry.', async () => {
+  it('To get multiEntry.', async () => {
     const db = idb.open('testdb');
     const store1 = db.objectStore('store1');
     const index1 = store1.index('index1');
@@ -243,7 +247,7 @@ describe('Index test', () => {
     expect(multiEntry).toBe(false);
   });
 
-  test('To get unique.', async () => {
+  it('To get unique.', async () => {
     const db = idb.open('testdb');
     const store1 = db.objectStore('store1');
     const index1 = store1.index('index1');
@@ -251,7 +255,7 @@ describe('Index test', () => {
     expect(unique).toBe(false);
   });
 
-  test('To get.', async () => {
+  it('To get.', async () => {
     const db = idb.open('testdb');
     const store1 = db.objectStore('store1');
     const index1 = store1.index('index1');
@@ -263,29 +267,31 @@ describe('Index test', () => {
     expect(value2).toStrictEqual({ testkey: 2, test: { index: 'b' } });
   });
 
-  test('To add indexes later.', async () => {
+  it('To add indexes later.', async () => {
     const db = idb.open('testdb');
     const store1 = db.objectStore('store1', null, [
       { name: 'index2', keyPath: 'test.index2' },
     ]);
 
     const indexNames = await store1.indexNames();
-    expect(indexNames).toStrictEqual(['index1', 'index2']);
+    expect(indexNames).toHaveLength(2);
+    expect(indexNames[0]).toBe('index1');
+    expect(indexNames[1]).toBe('index2');
 
     const index2 = store1.index('index2');
     const result = await index2.getAll();
     expect(result).toStrictEqual([]);
   });
 
-  test('To deleteIndex.', async () => {
+  it('To deleteIndex.', async () => {
     const db = idb.open('testdb');
     const store1 = db.objectStore('store1');
     await store1.deleteIndex('index1');
     const indexNames = await store1.indexNames();
-    expect(indexNames).toStrictEqual([]);
+    expect(indexNames).toHaveLength(0);
   });
 
-  test('DB should not be upgraded when the index already exist.', async () => {
+  it('DB should not be upgraded when the index already exist.', async () => {
     const db = idb.open('testdb');
     expect(await db.version()).toBe(2);
 
@@ -294,7 +300,8 @@ describe('Index test', () => {
     ]);
 
     const indexNames = await store1.indexNames();
-    expect(indexNames).toStrictEqual(['index1']);
+    expect(indexNames).toHaveLength(1);
+    expect(indexNames[0]).toBe('index1');
 
     expect(await db.version()).toBe(2);
   });

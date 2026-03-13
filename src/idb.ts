@@ -1,14 +1,3 @@
-/*
- * idb.ts
- *
- * Copyright (c) 2025 haiix
- *
- * This software is released under the MIT license.
- * See: https://opensource.org/licenses/MIT
- */
-
-export const version = '0.1.0';
-
 const READONLY = 0;
 const READWRITE = 1;
 const CREATE = 0;
@@ -18,28 +7,28 @@ type TransactionMode = typeof READONLY | typeof READWRITE;
 type UpgMethod = typeof CREATE | typeof DELETE;
 
 type UpgReq = [
-  string, // ObjectStoreName
-  UpgMethod, // Method
+  ObjectStoreName: string,
+  Method: UpgMethod,
   (db: IDBDatabase) => unknown,
 ];
 
 type UpgIReq = [
-  string, // IndexName
-  UpgMethod, // Method
+  IndexName: string,
+  Method: UpgMethod,
   (objectStore: IDBObjectStore) => unknown,
 ];
 
 type Req = [
-  string, // ObjectStoreName
-  TransactionMode, // Mode
+  ObjectStoreName: string,
+  Mode: TransactionMode,
   (tx: IDBTransaction) => unknown,
 ];
 
-export type IndexParameters = {
+export interface IndexParameters {
   name: string;
   keyPath: string | Iterable<string>;
   options?: IDBIndexParameters;
-};
+}
 
 function createDictionary<T>(): Record<string, T> {
   return Object.create(null) as Record<string, T>;
@@ -47,10 +36,10 @@ function createDictionary<T>(): Record<string, T> {
 
 function reqToAsync<T>(req: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
-    req.onsuccess = () => {
+    req.onsuccess = (): void => {
       resolve(req.result);
     };
-    req.onerror = () => {
+    req.onerror = (): void => {
       reject(
         req.error ?? req.transaction?.error ?? new Error('Request failed.'),
       );
@@ -61,7 +50,6 @@ function reqToAsync<T>(req: IDBRequest<T>): Promise<T> {
 async function* reqToAsyncGen<T>(
   req: IDBRequest<T | null>,
 ): AsyncGenerator<T, void> {
-  // eslint-disable-next-line no-await-in-loop
   for (let cursor; (cursor = await reqToAsync(req)); ) {
     yield cursor;
   }
@@ -86,8 +74,10 @@ export class Idb {
   ): Promise<T> {
     const req = indexedDB.open(this.name, dbVersion);
     if (onupgradeneeded) {
-      req.onupgradeneeded = () => {
-        onupgradeneeded(req.result, req.transaction as IDBTransaction);
+      req.onupgradeneeded = (): void => {
+        if (req.transaction) {
+          onupgradeneeded(req.result, req.transaction);
+        }
       };
     }
     try {
@@ -106,10 +96,10 @@ export class Idb {
     let result: T;
     return new Promise((resolve, reject) => {
       const tx = db.transaction(objectStoreNames, mode);
-      tx.oncomplete = () => {
+      tx.oncomplete = (): void => {
         resolve(result);
       };
-      tx.onerror = () => {
+      tx.onerror = (): void => {
         reject(tx.error ?? new Error('Transaction failed.'));
       };
       try {
@@ -121,10 +111,8 @@ export class Idb {
     });
   }
 
-  private addUpgIRec(objectStoreName: string, upgIRec: UpgIReq) {
-    if (!this.upgIReqs[objectStoreName]) {
-      this.upgIReqs[objectStoreName] = [];
-    }
+  private addUpgIRec(objectStoreName: string, upgIRec: UpgIReq): void {
+    this.upgIReqs[objectStoreName] ??= [];
     this.upgIReqs[objectStoreName].push(upgIRec);
   }
 
@@ -144,7 +132,7 @@ export class Idb {
     this.upgReqs.push([
       name,
       CREATE,
-      (db) => {
+      (db): void => {
         if (!db.objectStoreNames.contains(name)) {
           if (options) {
             db.createObjectStore(name, options);
@@ -159,7 +147,7 @@ export class Idb {
         this.addUpgIRec(name, [
           index.name,
           CREATE,
-          (objectStore) => {
+          (objectStore): void => {
             if (!objectStore.indexNames.contains(index.name)) {
               objectStore.createIndex(index.name, index.keyPath, index.options);
             }
@@ -174,7 +162,7 @@ export class Idb {
     this.upgReqs.push([
       name,
       DELETE,
-      (db) => {
+      (db): void => {
         if (db.objectStoreNames.contains(name)) {
           db.deleteObjectStore(name);
         }
@@ -187,7 +175,7 @@ export class Idb {
     this.addUpgIRec(objectStoreName, [
       indexName,
       DELETE,
-      (objectStore) => {
+      (objectStore): void => {
         if (objectStore.indexNames.contains(indexName)) {
           objectStore.deleteIndex(indexName);
         }
@@ -215,11 +203,10 @@ export class Idb {
 
     return this.tx(db, targetObjectStoreNames, 'readonly', (tx) => {
       for (const objectStoreName of targetObjectStoreNames) {
-        const objectStore = tx.objectStore(objectStoreName);
+        if (!this.upgIReqs[objectStoreName]) continue;
 
-        for (const [indexName, method] of this.upgIReqs[
-          objectStoreName
-        ] as UpgIReq[]) {
+        const objectStore = tx.objectStore(objectStoreName);
+        for (const [indexName, method] of this.upgIReqs[objectStoreName]) {
           const contains = objectStore.indexNames.contains(indexName);
 
           if (method === CREATE && !contains) {
@@ -330,11 +317,11 @@ abstract class IdbStoreBase<U extends IDBObjectStore | IDBIndex> {
         .requestToCommit([
           this.osName,
           mode,
-          (tx) => {
+          (tx): void => {
             try {
               resolve(callback(this.getTarget(tx)));
             } catch (error) {
-              reject(error);
+              reject(error as Error);
             }
           },
         ])
@@ -382,7 +369,7 @@ abstract class IdbStoreBase<U extends IDBObjectStore | IDBIndex> {
     return this.regq(READONLY, (os) => os.getKey(query));
   }
 
-  keyPath(): Promise<string | string[]> {
+  keyPath(): Promise<string | string[] | null> {
     return this.reg(READONLY, (os) => os.keyPath);
   }
 
@@ -453,10 +440,8 @@ export class IdbIndex extends IdbStoreBase<IDBIndex> {
   }
 }
 
-export function open(dbname: string) {
+export function open(dbname: string): Idb {
   return new Idb(dbname);
 }
 
-export default {
-  open,
-};
+export default { open };
