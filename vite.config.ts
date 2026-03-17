@@ -13,7 +13,7 @@ export default defineConfig({
     rollupOptions: { external: [] },
   },
   plugins: [
-    dts({ exclude: ['tests/**'], insertTypesEntry: true, rollupTypes: true }),
+    dts({ exclude: ['tests/**'], rollupTypes: true }),
   ],
   test: {
     environment: 'jsdom',
