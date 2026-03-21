@@ -26,10 +26,7 @@ import idb from '@haiix/idb';
 const db = idb.open('myDatabase');
 
 // Create an object store
-const store = db.objectStore('myStore', {
-  keyPath: 'id',
-  autoIncrement: true
-});
+const store = db.objectStore('myStore', { keyPath: 'id', autoIncrement: true });
 
 // Add data
 await store.add({ name: 'John', age: 30 });
@@ -51,23 +48,22 @@ This library automatically optimizes database transactions by batching synchrono
 ### Transaction Batching
 
 #### Sequential Operations (Multiple Transactions)
+
 When operations are executed sequentially with await, each operation creates its own transaction:
 
 ```typescript
 // Creates TWO separate transactions
-await store.add('value1', 'key1');  // Transaction #1
-await store.add('value2', 'key2');  // Transaction #2
+await store.add('value1', 'key1'); // Transaction #1
+await store.add('value2', 'key2'); // Transaction #2
 ```
 
 #### Parallel Operations (Single Transaction)
+
 When operations are executed in parallel using Promise.all, they are automatically batched into a single transaction:
 
 ```typescript
 // Creates ONE transaction for both operations
-await Promise.all([
-  store.add('value1', 'key1'),
-  store.add('value2', 'key2')
-]);
+await Promise.all([store.add('value1', 'key1'), store.add('value2', 'key2')]);
 ```
 
 ### Best Practices for Transaction Optimization
@@ -75,12 +71,13 @@ await Promise.all([
 To make the most of transaction batching:
 
 1. Group Related Operations:
+
 ```typescript
 // Good: Single transaction
 await Promise.all([
   userStore.add(userData),
   profileStore.add(profileData),
-  settingsStore.add(settingsData)
+  settingsStore.add(settingsData),
 ]);
 
 // Less efficient: Multiple transactions
@@ -90,13 +87,18 @@ await settingsStore.add(settingsData);
 ```
 
 2. Use Promise.all for Parallel Operations:
+
 ```typescript
 // Efficient batch processing
-const users = [{id: 1, name: 'John'}, {id: 2, name: 'Jane'}];
-await Promise.all(users.map(user => store.add(user)));
+const users = [
+  { id: 1, name: 'John' },
+  { id: 2, name: 'Jane' },
+];
+await Promise.all(users.map((user) => store.add(user)));
 ```
 
 3. Balance Between Batching and Response Time:
+
 ```typescript
 // For large datasets, consider batching in chunks
 const BATCH_SIZE = 100;
@@ -106,7 +108,7 @@ for (let i = 0; i < items.length; i += BATCH_SIZE) {
 }
 
 for (const chunk of chunks) {
-  await Promise.all(chunk.map(item => store.add(item)));
+  await Promise.all(chunk.map((item) => store.add(item)));
 }
 ```
 
