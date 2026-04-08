@@ -12,9 +12,7 @@ export default defineConfig({
     },
     rollupOptions: { external: [] },
   },
-  plugins: [
-    dts({ exclude: ['tests/**'], rollupTypes: true }),
-  ],
+  plugins: [dts({ exclude: ['tests/**'], rollupTypes: true })],
   test: {
     environment: 'jsdom',
     include: ['tests/**/*.{test,spec}.ts'],
