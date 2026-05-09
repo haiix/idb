@@ -348,7 +348,7 @@ abstract class IdbStoreBase<U extends IDBObjectStore | IDBIndex> {
             try {
               resolve(callback(this.getTarget(tx)));
             } catch (error) {
-              reject(error as Error);
+              reject(error instanceof Error ? error : new Error(String(error)));
             }
           },
         ])
