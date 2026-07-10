@@ -5,20 +5,27 @@
 
 version: 2
 updates:
-  - package-ecosystem: 'npm'
-    directory: '/'
+  - package-ecosystem: npm
+    directory: /
     schedule:
-      interval: 'weekly'
-    target-branch: 'develop'
+      interval: weekly
+    target-branch: develop
+
     groups:
+      typescript:
+        patterns:
+          - 'typescript'
+
       all-dependencies:
         patterns:
           - '*'
+        exclude-patterns:
+          - 'typescript'
 
   - package-ecosystem: 'github-actions'
-    directory: '/'
+    directory: /
     schedule:
-      interval: 'weekly'
+      interval: weekly
     target-branch: 'develop'
     groups:
       actions-dependencies:
