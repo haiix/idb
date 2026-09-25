@@ -406,12 +406,18 @@ abstract class IdbStoreBase<U extends IDBObjectStore | IDBIndex> {
     return this.reg(READONLY, (os) => os.keyPath);
   }
 
-  openCursor(
+  /* eslint-disable @typescript-eslint/no-unnecessary-type-parameters */
+  openCursor<T>(
     query?: IDBValidKey | IDBKeyRange | null,
     direction?: IDBCursorDirection,
-  ): AsyncGenerator<IDBCursorWithValue, void, unknown> {
+  ): AsyncGenerator<
+    Omit<IDBCursorWithValue, 'value'> & { value: T },
+    void,
+    unknown
+  > {
     return this.regc(READWRITE, (os) => os.openCursor(query, direction));
   }
+  /* eslint-enable @typescript-eslint/no-unnecessary-type-parameters */
 
   openKeyCursor(
     query?: IDBValidKey | IDBKeyRange | null,
